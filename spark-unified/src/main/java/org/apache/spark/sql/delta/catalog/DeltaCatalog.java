@@ -18,16 +18,13 @@ package org.apache.spark.sql.delta.catalog;
 
 import io.delta.spark.internal.v2.catalog.DdlOperation;
 import io.delta.spark.internal.v2.catalog.DeltaKernelStagedDDLTable;
-import io.delta.spark.internal.v2.catalog.PostCommitAction;
 import io.delta.spark.internal.v2.catalog.PostCommitActions;
 import io.delta.spark.internal.v2.catalog.SparkTable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
-import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.catalyst.catalog.CatalogTable;
 import org.apache.spark.sql.connector.catalog.Identifier;
-import org.apache.spark.sql.connector.catalog.StagedTable;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
 import org.apache.spark.sql.connector.catalog.Table;
 import org.apache.spark.sql.connector.expressions.Transform;
@@ -158,74 +155,47 @@ public class DeltaCatalog extends AbstractDeltaCatalog {
       return super.createTable(ident, schema, partitions, properties);
     }
 
-    StagedTable staged = stageCreate(ident, schema, partitions, properties);
-    staged.commitStagedChanges();
-    return loadTable(ident);
-  }
-
-  @Override
-  public StagedTable stageCreate(
-      Identifier ident,
-      StructType schema,
-      Transform[] partitions,
-      Map<String, String> properties) {
-    DeltaV2Mode connectorMode = new DeltaV2Mode(spark().sessionState().conf());
-    if (!connectorMode.shouldCatalogReturnV2Tables()) {
-      return super.stageCreate(ident, schema, partitions, properties);
-    }
-
-    String provider = properties.get(TableCatalog.PROP_PROVIDER);
-    if (provider == null || !DeltaSourceUtils.isDeltaDataSourceName(provider)) {
-      return super.stageCreate(ident, schema, partitions, properties);
-    }
-
-    final String catalogName = name();
-    return buildStagedCreateTable(spark(), catalogName, ident, schema, partitions, properties);
-  }
-
-  private DeltaKernelStagedDDLTable buildStagedCreateTable(
-      SparkSession spark,
-      String catalogName,
-      Identifier ident,
-      StructType schema,
-      Transform[] partitions,
-      Map<String, String> properties) {
     if (isPathIdentifier(ident)) {
-      // Path-based identifier (delta.`/abs/path`): no catalog registration required.
-      return new DeltaKernelStagedDDLTable(
-          spark,
-          catalogName,
-          ident,
-          ident.name(),
-          schema,
-          partitions,
-          properties,
-          DdlOperation.CREATE,
-          PostCommitActions.none());
+      DeltaKernelStagedDDLTable staged =
+          new DeltaKernelStagedDDLTable(
+              spark(),
+              name(),
+              ident,
+              ident.name(),
+              schema,
+              partitions,
+              properties,
+              DdlOperation.CREATE,
+              PostCommitActions.none());
+      staged.commitStagedChanges();
+      return loadTable(ident);
     }
 
-    // Catalog-based identifier: commit metadata via Kernel, then finalize catalog visibility if
-    // required.
     scala.Tuple2<CatalogTable, String> spec =
         SessionCatalogTableBuilder.buildSessionCatalogEntry(
-            spark, ident, schema, partitions, properties);
+            spark(), ident, schema, partitions, properties);
     CatalogTable tableDesc = spec._1();
     String tablePath = spec._2();
 
-    PostCommitAction postCommitAction =
-        CatalogTableUtils.isUnityCatalogManagedTableFromProperties(properties)
-            ? PostCommitActions.unityCatalog()
-            : PostCommitActions.sessionCatalog(spark, tableDesc);
+    DeltaKernelStagedDDLTable staged =
+        new DeltaKernelStagedDDLTable(
+            spark(),
+            name(),
+            ident,
+            tablePath,
+            schema,
+            partitions,
+            properties,
+            DdlOperation.CREATE,
+            PostCommitActions.none());
+    staged.commitStagedChanges();
 
-    return new DeltaKernelStagedDDLTable(
-        spark,
-        catalogName,
-        ident,
-        tablePath,
-        schema,
-        partitions,
-        properties,
-        DdlOperation.CREATE,
-        postCommitAction);
+    if (CatalogTableUtils.isUnityCatalogManagedTableFromProperties(properties)) {
+      createCatalogTable(ident, schema, partitions, properties);
+    } else {
+      PostCommitActions.sessionCatalog(spark(), tableDesc).execute();
+    }
+
+    return loadTable(ident);
   }
 }

@@ -356,7 +356,7 @@ class AbstractDeltaCatalog extends DelegatingCatalogExtension
       .getOrElse(spark.sessionState.conf.getConf(SQLConf.DEFAULT_DATA_SOURCE_NAME))
   }
 
-  private def createCatalogTable(
+  protected def createCatalogTable(
       ident: Identifier,
       schema: StructType,
       partitions: Array[Transform],
