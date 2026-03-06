@@ -104,6 +104,10 @@ object DeltaStreamUtils {
       enableSchemaTrackingForTypeWidening: Boolean
   )
 
+<<<<<<< HEAD
+=======
+  // TODO(#5319): migrate v1 connector to reuse this utility
+>>>>>>> 04a3a7f8a (Squashed commits:)
   object SchemaReadOptions {
     /**
      * Creates a SchemaReadOptions instance from SparkSession configuration settings.
