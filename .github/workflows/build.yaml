@@ -38,6 +38,9 @@ jobs:
             ~/.m2/repository/io/unitycatalog
           key: delta-sbt-cache-cross-spark-${{ hashFiles('project/scripts/setup_unitycatalog_main.sh') }}
 
+      - name: Test timing collection
+        run: python3 -m unittest discover -s project/scripts -p 'test_collect_test_durations.py'
+
       - name: Test CI scheduling
         run: NUM_SHARDS=8 build/sbt 'reload plugins' 'Test / runMain TestParallelizationTest'
 

@@ -30,6 +30,7 @@ import tempfile
 import time
 import zipfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from xml.etree import ElementTree
 
 
@@ -148,13 +149,17 @@ def collect_from_run(run_id, tmpdir):
         print(f"  No artifacts in run {run_id}", file=sys.stderr)
         return {}
 
-    run_durations = {}
-    for art in artifacts:
+    def collect_artifact(art):
         print(f"    Spark {art['spark_version']}, Shard {art['shard']}...")
         artifact_dir = download_and_extract(art["id"], tmpdir)
-        for name, dur in parse_junit_xmls(artifact_dir).items():
-            if name not in run_durations or dur > run_durations[name]:
-                run_durations[name] = dur
+        return parse_junit_xmls(artifact_dir)
+
+    run_durations = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for durations in pool.map(collect_artifact, artifacts):
+            for name, dur in durations.items():
+                if name not in run_durations or dur > run_durations[name]:
+                    run_durations[name] = dur
 
     return run_durations
 
