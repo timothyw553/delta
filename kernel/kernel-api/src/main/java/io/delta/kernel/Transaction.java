@@ -46,6 +46,7 @@ import io.delta.kernel.internal.tablefeatures.TableFeatures;
 import io.delta.kernel.internal.util.ColumnMapping;
 import io.delta.kernel.internal.util.PartitionUtils;
 import io.delta.kernel.internal.util.SchemaIterable;
+import io.delta.kernel.internal.util.SchemaUtils;
 import io.delta.kernel.statistics.DataFileStatistics;
 import io.delta.kernel.types.StructField;
 import io.delta.kernel.types.StructType;
@@ -163,7 +164,8 @@ public interface Transaction {
    *
    * @param engine {@link Engine} instance to use.
    * @param transactionState The transaction state
-   * @param dataIter Iterator of logical data (with schema same as the table schema) to transform to
+   * @param dataIter Iterator of logical data (with schema same as the table schema, except that it
+   *     must omit {@code void} columns, which are never written to data files) to transform to
    *     physical data. All the data n this iterator should belong to one physical partition and it
    *     should also include the partition data.
    * @param partitionValues The partition values for the data. If the table is un-partitioned, the
@@ -195,6 +197,9 @@ public interface Transaction {
         protocol.supportsFeature(TableFeatures.MATERIALIZE_PARTITION_COLUMNS_W_FEATURE);
     blockIfColumnMappingEnabled(transactionState);
     blockIfVariantDataTypeIsDefined(tableSchema);
+    // Void columns are never written to data files, so the data excludes them.
+    SchemaUtils.validateVoidTypesAreWritable(tableSchema);
+    StructType physicalDataSchema = SchemaUtils.removeVoidFields(tableSchema);
     // We recognize the AllowColumnDefaults feature for Iceberg v3
     // but do not support writing with it yet
     ColumnDefaults.blockWriteIfEnabled(transactionState);
@@ -204,8 +209,8 @@ public interface Transaction {
     return dataIter.map(
         filteredBatch -> {
           ColumnarBatch data = filteredBatch.getData();
-          if (!data.getSchema().isWriteCompatible(tableSchema)) {
-            throw dataSchemaMismatch(tablePath, tableSchema, data.getSchema());
+          if (!data.getSchema().isWriteCompatible(physicalDataSchema)) {
+            throw dataSchemaMismatch(tablePath, physicalDataSchema, data.getSchema());
           }
 
           if (isIcebergCompatEnabled || materializePartitionColumnsEnabled) {
@@ -341,6 +346,8 @@ public interface Transaction {
     checkArgument(
         dataWriteContext instanceof DataWriteContextImpl,
         "DataWriteContext is not created by the `Transaction.getWriteContext()`");
+
+    SchemaUtils.validateVoidTypesAreWritable(getLogicalSchema(transactionState));
 
     boolean isIcebergCompatV2Enabled = isIcebergCompatV2Enabled(transactionState);
     boolean isIcebergCompatV3Enabled = isIcebergCompatV3Enabled(transactionState);

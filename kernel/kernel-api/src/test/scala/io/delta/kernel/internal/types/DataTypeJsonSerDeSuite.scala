@@ -74,6 +74,7 @@ class DataTypeJsonSerDeSuite extends AnyFunSuite {
     ("\"decimal\"", DecimalType.USER_DEFAULT),
     ("\"decimal(10, 5)\"", new DecimalType(10, 5)),
     ("\"variant\"", VariantType.VARIANT),
+    ("\"void\"", VoidType.VOID),
     ("\"geometry\"", GeometryType.ofDefault()),
     ("\"geometry(EPSG:0)\"", GeometryType.ofCRS("EPSG:0")),
     ("\"geography\"", GeographyType.ofDefault()),

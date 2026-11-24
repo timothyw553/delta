@@ -32,6 +32,7 @@ import io.delta.kernel.internal.actions.Protocol;
 import io.delta.kernel.internal.columndefaults.ColumnDefaults;
 import io.delta.kernel.internal.skipping.StatsSchemaHelper;
 import io.delta.kernel.internal.types.TypeWideningChecker;
+import io.delta.kernel.internal.types.VoidType;
 import io.delta.kernel.types.*;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -482,6 +483,7 @@ public class SchemaUtils {
       if (!existingField.equals(newField)) {
         if (!existingField.getDataType().isNested()
             && !newField.getDataType().isNested()
+            && !(existingField.getDataType() instanceof VoidType)
             && !existingField.getDataType().equivalent(newField.getDataType())) {
           // Type changes only apply to non-nested types.  This loop evaluates both
           // nested and non-nested, so we narrow down updates here. Actual type differences
@@ -720,6 +722,11 @@ public class SchemaUtils {
       }
       DataType existingType = existingField.getDataType();
       DataType newType = newField.getDataType();
+      if (existingType instanceof VoidType) {
+        // A void column may become any type, without the type widening feature. No data file
+        // contains the column, so every existing row reads as null.
+        return;
+      }
       if (!existingType.equivalent(newType)) {
 
         if (typeWideningEnabled) {
@@ -816,6 +823,11 @@ public class SchemaUtils {
         return;
       }
 
+      if (field.getDataType() instanceof VoidType) {
+        // void columns are never written to data files, so they have no statistics
+        continue;
+      }
+
       Column currentColumn = null;
       if (parentColumn == null) {
         // Skip excluded top-level columns
@@ -846,6 +858,72 @@ public class SchemaUtils {
   }
 
   /**
+   * Rejects table schemas whose shape cannot be written, because {@code void} columns are never
+   * stored in data files. Such tables can still be created, altered and read. The unwritable shapes
+   * are:
+   *
+   * <ul>
+   *   <li>a {@code void} type anywhere inside an array or a map
+   *   <li>a struct (at any level) whose fields are all {@code void}
+   *   <li>a table whose columns are all {@code void}
+   * </ul>
+   *
+   * @throws KernelException if writing data files to a table with this schema is not allowed
+   */
+  public static void validateVoidTypesAreWritable(StructType schema) {
+    validateVoidTypesAreWritable(schema, /* path= */ "", /* insideCollection= */ false);
+  }
+
+  private static void validateVoidTypesAreWritable(
+      DataType type, String path, boolean insideCollection) {
+    if (type instanceof VoidType) {
+      if (insideCollection) {
+        throw DeltaErrors.invalidVoidTypeUsage(
+            path, "a void type inside an array or map cannot be written");
+      }
+    } else if (type instanceof StructType) {
+      StructType struct = (StructType) type;
+      if (struct.fields().stream().allMatch(f -> f.getDataType() instanceof VoidType)) {
+        throw DeltaErrors.invalidVoidTypeUsage(path, "a struct with only void fields");
+      }
+      for (StructField field : struct.fields()) {
+        validateVoidTypesAreWritable(
+            field.getDataType(),
+            path.isEmpty() ? field.getName() : path + "." + field.getName(),
+            insideCollection);
+      }
+    } else if (type instanceof ArrayType) {
+      validateVoidTypesAreWritable(
+          ((ArrayType) type).getElementType(), path + ".element", /* insideCollection= */ true);
+    } else if (type instanceof MapType) {
+      MapType map = (MapType) type;
+      validateVoidTypesAreWritable(map.getKeyType(), path + ".key", /* insideCollection= */ true);
+      validateVoidTypesAreWritable(
+          map.getValueType(), path + ".value", /* insideCollection= */ true);
+    }
+  }
+
+  /**
+   * Returns the schema without its {@code void} fields, which is the schema of the data that is
+   * written to data files. Only struct fields are pruned; the schema must already satisfy {@link
+   * #validateVoidTypesAreWritable}.
+   */
+  public static StructType removeVoidFields(StructType schema) {
+    List<StructField> fields = new ArrayList<>();
+    for (StructField field : schema.fields()) {
+      DataType type = field.getDataType();
+      if (type instanceof VoidType) {
+        continue;
+      }
+      fields.add(
+          type instanceof StructType
+              ? field.withDataType(removeVoidFields((StructType) type))
+              : field);
+    }
+    return new StructType(fields);
+  }
+
+  /**
    * Validate the supported data types. Once we start supporting additional types, take input the
    * protocol features and validate the schema.
    *
@@ -866,6 +944,7 @@ public class SchemaUtils {
         || dataType instanceof TimestampType
         || dataType instanceof TimestampNTZType
         || dataType instanceof VariantType
+        || dataType instanceof VoidType
         || dataType instanceof GeometryType
         || dataType instanceof GeographyType) {
       // supported types

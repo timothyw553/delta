@@ -27,7 +27,7 @@ import io.delta.kernel.exceptions.KernelException
 import io.delta.kernel.internal.TableConfig
 import io.delta.kernel.internal.actions.{Format, Metadata, Protocol}
 import io.delta.kernel.internal.tablefeatures.{TableFeature, TableFeatures}
-import io.delta.kernel.internal.types.DataTypeJsonSerDe
+import io.delta.kernel.internal.types.{DataTypeJsonSerDe, VoidType}
 import io.delta.kernel.internal.util.ColumnMapping.{COLUMN_MAPPING_ID_KEY, COLUMN_MAPPING_MODE_KEY, COLUMN_MAPPING_PHYSICAL_NAME_KEY}
 import io.delta.kernel.internal.util.SchemaUtils.{computeSchemaChangesById, validateUpdatedSchemaAndGetUpdatedSchema}
 import io.delta.kernel.internal.util.VectorUtils.stringStringMapValue
@@ -1707,6 +1707,115 @@ class SchemaUtilsSuite extends AnyFunSuite {
           false,
           arrayMetadata),
         fieldMetadata(1, "top_level_struct"))
+  }
+
+  ///////////////////////////////////////////////////////////////////////////
+  // Void type
+  ///////////////////////////////////////////////////////////////////////////
+
+  private val voidInStruct = new StructType()
+    .add("a", INTEGER)
+    .add("s", new StructType().add("x", LONG).add("v", VoidType.VOID))
+    .add("v", VoidType.VOID)
+
+  test("void columns are valid in any position of a created schema") {
+    validateSchema(voidInStruct)
+    // Unwritable shapes can still be created; only writing data to them is rejected.
+    validateSchema(new StructType().add("v", VoidType.VOID))
+    validateSchema(new StructType().add(
+      "a",
+      INTEGER).add("arr", new ArrayType(VoidType.VOID, true)))
+    validateSchema(
+      new StructType()
+        .add("a", INTEGER)
+        .add("m", new MapType(StringType.STRING, VoidType.VOID, true)))
+  }
+
+  test("void columns are not valid partition columns") {
+    expectFailure("partition", "void") {
+      SchemaUtils.validatePartitionColumns(voidInStruct, util.Arrays.asList("v"))
+    }
+  }
+
+  test("validateVoidTypesAreWritable accepts void struct fields next to other fields") {
+    SchemaUtils.validateVoidTypesAreWritable(voidInStruct)
+  }
+
+  Seq(
+    "all columns are void" -> new StructType().add("v", VoidType.VOID),
+    "all columns are void, several" ->
+      new StructType().add("v1", VoidType.VOID).add("v2", VoidType.VOID),
+    "nested struct with only void fields" ->
+      new StructType().add("a", INTEGER).add("s", new StructType().add("v", VoidType.VOID)),
+    "void array element" ->
+      new StructType().add("a", INTEGER).add("arr", new ArrayType(VoidType.VOID, true)),
+    "void map value" ->
+      new StructType().add("a", INTEGER)
+        .add("m", new MapType(StringType.STRING, VoidType.VOID, true)),
+    "void field of a struct inside an array" ->
+      new StructType().add("a", INTEGER).add(
+        "arr",
+        new ArrayType(new StructType().add("x", INTEGER).add("v", VoidType.VOID), true)),
+    "void field of a struct inside a map" ->
+      new StructType().add("a", INTEGER).add(
+        "m",
+        new MapType(
+          StringType.STRING,
+          new StructType().add("x", INTEGER).add("v", VoidType.VOID),
+          true))).foreach { case (name, schema) =>
+    test(s"validateVoidTypesAreWritable rejects: $name") {
+      expectFailure("unwritable void type") {
+        SchemaUtils.validateVoidTypesAreWritable(schema)
+      }
+    }
+  }
+
+  test("removeVoidFields prunes void fields at every struct level") {
+    assert(SchemaUtils.removeVoidFields(voidInStruct) ===
+      new StructType()
+        .add("a", INTEGER)
+        .add("s", new StructType().add("x", LONG)))
+  }
+
+  test("collectLeafColumns skips void columns") {
+    val columns = SchemaUtils.collectLeafColumns(voidInStruct, emptySet(), -1).asScala
+    assert(columns.map(_.toString) === Seq("column(`a`)", "column(`s`.`x`)"))
+  }
+
+  private def voidEvolution(newType: DataType): (StructType, StructType) = (
+    newSchema(
+      (1, new StructField("v", VoidType.VOID, true)),
+      (2, new StructField("a", INTEGER, true))),
+    newSchema((1, new StructField("v", newType, true)), (2, new StructField("a", INTEGER, true))))
+
+  Seq[DataType](
+    StringType.STRING,
+    LONG,
+    new ArrayType(INTEGER, true),
+    new StructType().add("x", INTEGER, true, fieldMetadata(3))).foreach { newType =>
+    test(s"a void column may evolve into $newType without type widening") {
+      val (before, after) = voidEvolution(newType)
+      val updated = validateUpdatedSchemaAndGetUpdatedSchema(
+        metadata(before),
+        metadata(after),
+        dummyProtocol,
+        emptySet(),
+        false /* allowNewRequiredFields */ )
+      // no type change is recorded: void is not a type widening
+      assert(!updated.isPresent)
+    }
+  }
+
+  test("a column may not evolve into void") {
+    val (before, after) = voidEvolution(INTEGER)
+    expectFailure("Cannot change the type of existing field v from integer to void") {
+      validateUpdatedSchemaAndGetUpdatedSchema(
+        metadata(after),
+        metadata(before),
+        dummyProtocol,
+        emptySet(),
+        false /* allowNewRequiredFields */ )
+    }
   }
 
   private def assertSchemaEvolutionFailure[T <: Throwable](
