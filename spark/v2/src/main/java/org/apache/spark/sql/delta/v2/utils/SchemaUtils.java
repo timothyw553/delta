@@ -17,6 +17,7 @@ package org.apache.spark.sql.delta.v2.utils;
 
 import static java.util.Objects.requireNonNull;
 
+import io.delta.kernel.internal.types.VoidType;
 import io.delta.kernel.types.ArrayType;
 import io.delta.kernel.types.BinaryType;
 import io.delta.kernel.types.BooleanType;
@@ -203,6 +204,8 @@ public class SchemaUtils {
           (org.apache.spark.sql.types.StructType) sparkDataType);
     } else if (sparkDataType instanceof org.apache.spark.sql.types.VariantType) {
       return VariantType.VARIANT;
+    } else if (sparkDataType instanceof org.apache.spark.sql.types.NullType) {
+      return VoidType.VOID;
     } else {
       throw new IllegalArgumentException("unsupported data type " + sparkDataType);
     }

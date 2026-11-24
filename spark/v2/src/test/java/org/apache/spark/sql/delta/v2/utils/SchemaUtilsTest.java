@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.delta.kernel.internal.actions.Format;
+import io.delta.kernel.internal.types.VoidType;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.ArrayType;
 import io.delta.kernel.types.BinaryType;
@@ -75,6 +76,7 @@ public class SchemaUtilsTest {
     checkConversion(DataTypes.TimestampType, TimestampType.TIMESTAMP);
     checkConversion(DataTypes.TimestampNTZType, TimestampNTZType.TIMESTAMP_NTZ);
     checkConversion(DataTypes.VariantType, VariantType.VARIANT);
+    checkConversion(DataTypes.NullType, VoidType.VOID);
   }
 
   static Stream<Arguments> collations() {
